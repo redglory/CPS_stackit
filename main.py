@@ -1,17 +1,15 @@
-from subprocess import Popen, PIPE, STDOUT
+from subprocess import Popen, PIPE
 import time
 import traceback
 import os
-import errno
-import collections
 
-from couchpotato.core.log import CPLog
+from couchpotato.core.logger import CPLog
 from couchpotato.core.event import addEvent, fireEvent
-from couchpotato.core.helpers.variable import splitString
 from couchpotato.core.plugins.base import Plugin
 from couchpotato.environment import Env
 
 log = CPLog(__name__)
+
 
 class Stackit(Plugin):
 
@@ -25,117 +23,152 @@ class Stackit(Plugin):
 
         addEvent('renamer.after', self.stackit, priority=80)
 
-    def stackit(self, message=None, group=None):
+    def stackit(self, message = None, group = None):
+        if not group: group = {}
 
-        if (len(argv) == 0 or len(argv) >= 2):
-            log.info("============================================================")
-            log.info("== How to use stackit: stackit.py <movies_root_directory> ==")
-            log.info("============================================================")
-        
-        movielist = getMovieFiles(argv)
+        # group['destination_dir'] ex: E:\Movies\Avatar.(2009)
+        # group['identifier'] ex: tt0089218
+        # group['filename'] ex: Avatar.(2009)
+        # group['renamed_files'] ex: [u'E:\Movies\Avatar.(2009)\Avatar.(2009).DVD-Rip.cd1.avi', u'E:\Movies\Avatar.(2009)\Avatar.(2009).DVD-Rip.cd2.avi']
+        log.debug("IMDB identifier: %s", group['identifier'])
+        log.debug("Movie name: %s", group['dirname'])
+        log.debug("Downloaded Movie directory: %s", group['parentdir'])
+        log.debug("Renamed Movie Files: %s", group['renamed_files'])
+
+        movie_path = group['destination_dir']
+        log.info("Found movie on: %s", movie_path)
+        movielist, cleanlist = self.getMovieFiles(movie_path)
         if not movielist:
-            log.info("No movies on %s to process", os.path.normpath(argv[0]).upper())
+            log.info("No unstacked movies found on: %s", movie_path)
         else:
-            process(movielist)
+            log.info("Found %s unstacked movie files for movie: %s", (str(len(movielist[movie_path])), movie_path))
+            log.debug("Unstacked files: %s", movielist[movie_path])
+            log.debug("Clean files: %s", cleanlist[movie_path])
+            self.process(movielist, cleanlist, group)
 
-    def getMovieFiles(argv):
-    
-        exts=[]
-        filelist={}
-        dirfiles=[]
-        
-        for x in range(1,10):
-            exts.append(".CD{0}.avi".format(x))
-            exts.append(".CD{0}.mkv".format(x))
-            exts.append(".CD{0}.mp4".format(x))
-        
-        log.info("Searching for unstacked movies on library: %s...", os.path.normpath(argv[0]).upper())
-        log.info("Searching files on root directory...")
-        for f in os.listdir(argv[0]):
-            if os.path.isfile(os.path.join(argv[0], f)):
-                for ext in exts:
-                    uppername = f.upper()
-                    if uppername.find(ext.upper()) != -1:
-                        fname = os.path.join(argv[0], f)
-                        dirfiles.append(fname)
-                        log.debug("Added movie part file %s ... !", fname)
-                filelist[argv[0]] = dirfiles
-        dirfiles = []
+    def getMovieFiles(self, movie_path):
 
-        for root, dirs, files in os.walk(argv[0]):
-            for dir in dirs:    
-                log.info("Searching movie files on %s sub-directory...", dir)
-                for ext in exts:
-                    for name in os.listdir(os.path.join(root, dir)):
-                        uppername = name.upper()
-                        if uppername.find(ext.upper()) != -1:
-                            fname = os.path.join(root, dir, name)
-                            dirfiles.append(fname)
-                            filelist[os.path.join(root, dir)] = dirfiles
-                dirfiles = []
-        
-        return collections.OrderedDict(sorted(filelist.items(), key = lambda t: t[0]))
-     
-    def remove_file(filepath):
-    
+        exts = []
+        clean = []
+        movielist = {}
+        moviefiles = []
+        cleanlist = {}
+        cleanfiles = []
+
+        for x in range(1, 10):
+            # movie extensions
+            exts.append(".cd{0}.avi".format(x))
+            exts.append(".cd{0}.mkv".format(x))
+            exts.append(".cd{0}.mp4".format(x))
+            # cleaning extensions
+            clean.append(".cd{0}.sub".format(x))
+            clean.append(".cd{0}.idx".format(x))
+            clean.append(".cd{0}.srt".format(x))
+            clean.append(".cd{0}.nfo".format(x))
+
+        log.info("Searching for unstacked movie on folder: %s", movie_path)
+        for f in os.listdir(movie_path):
+            if os.path.isfile(os.path.join(movie_path, f)):
+                lowercase = f.lower()
+                # find part files pattern on movie file
+                if any(ext in lowercase for ext in exts):
+                    fname = os.path.join(movie_path, f)
+                    moviefiles.append(fname)
+                    cleanfiles.append(fname)
+                    log.debug("Added movie part file %s", fname)
+                if any(c in lowercase for c in clean):
+                    cname = os.path.join(movie_path, f)
+                    cleanfiles.append(cname)
+                    log.debug("Added file %s for post-processing cleaning routine", cname)
+
+        if moviefiles:
+            movielist[movie_path] = moviefiles
+        if cleanfiles:
+            cleanlist[movie_path] = cleanfiles
+
+        return movielist, cleanlist
+
+    def remove_file(self, filepath):
+
         try:
             os.remove(os.path.realpath(filepath))
             log.info("Permanently removed file %s!", filepath)
         except:
             log.error("There was a problem removing file: %s!", filepath)
             pass
-    
-    def process(movies):
-    
-        movie_count = 0
-        movie_error_count = 0
-        startTime = time.time()
-        
+
+    def cleanfiles(self, cleanlist, movietxt, group):
+
+        for moviepath in cleanlist.keys():
+            log.info("Cleaning leftover files for movie folder: %s", moviepath)
+            log.debug("Leftovers: %s", cleanlist[moviepath])
+            for leftover in cleanlist[moviepath]:
+                log.debug("Deleting leftover: %s", leftover)
+                # delete leftovers from movie folder
+                try:
+                    self.remove_file(leftover)
+                    log.info("Successfully deleted leftover file %s from movie directory", os.path.realpath(leftover))
+                except:
+                    log.debug("There was a problem deleting leftover file %s from movie directory: %s", (leftover, (traceback.format_exc())))
+                    pass
+                # delete leftovers from renamed_files
+                try:
+                    group['renamed_files'].remove(os.path.realpath(leftover))
+                    log.info("Successfully removed leftover file %s from group['renamed_files']", os.path.realpath(leftover))
+                except:
+                    log.debug("There was a problem removing leftover file %s from group['renamed_files']: %s", (leftover, (traceback.format_exc())))
+                    pass
+        # delete movietxt
+        try:
+            self.remove_file(movietxt)
+            log.info("Successfully deleted movietxt file %s from movie directory", movietxt)
+        except:
+            log.debug("There was a problem deleting movietxt file %s from movie directory: %s", (movietxt, (traceback.format_exc())))
+            pass
+
+    def process(self, movies, cleanlist, group):
+
         for moviepath in movies.keys():
             movietxt = moviepath + '.txt'
-            f = open(movietxt, 'w') 
+            f = open(movietxt, 'w')
             for moviepart in movies[moviepath]:
                 moviefile = moviepart.replace("'", r"'\''")
                 f.write('file ' + "'" + moviefile + "'" + '\n')
-            f.flush() 
-            f.close()            
+            f.flush()
+            f.close()
             extension = os.path.splitext(moviepart)[1].lower()
-            movie_output = moviepart.rsplit('.',2)[0] + extension
-        
+            movie_output = moviepart.rsplit('.', 2)[0] + extension
+
             try:
                 log.info("Stacking movie: %s", moviepath)
-                ffmpeg_command = ["bin\\ffmpeg.exe", "-f", "concat", "-i", movietxt, "-c", "copy", "-y", movie_output]
+                ffmpeg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bin\\ffmpeg.exe")
+                ffmpeg_command = [ffmpeg_path, "-f", "concat", "-i", movietxt, "-c", "copy", "-y", movie_output]
                 log.info("Running FFMPEG with arguments: %s", ffmpeg_command)
-                ffmpeg = Popen(ffmpeg_command, stdout=PIPE, stderr=STDOUT)
-                output = ffmpeg.communicate()
-                if ffmpeg.returncode == 0:  
+                ffmpeg = Popen(ffmpeg_command, stdout=PIPE)
+                res = ffmpeg.wait()
+                if res == 0:
                     log.info("Stacking movie: %s finished successfully!", moviepath)
-                    time.sleep(2)
-                    log.info("Cleaning Up movie: %s by removing part files and temporary input file: %s!", (moviepath, movietxt))
-                    for moviepart in movies[moviepath]:
-                        remove_file(moviepart)
-                        time.sleep(0.5)		  
-                    remove_file(movietxt)
-                    log.info("Finished cleaning up movie: %s successfully!", moviepath)
-                    movie_count += 1
-                    return True	
+                    # update renamed_files list with final movie file
+                    try:
+                        group['renamed_files'].append(os.path.realpath(movie_output))
+                        log.info("Added stacked movie file %s to group['renamed_files']", os.path.realpath(movie_output))
+                    except:
+                        log.debug("There was a problem adding stacked movie file %s to group['renamed_files']: %s", (movie_output, (traceback.format_exc())))
+                        pass
+
+                    # Cleaning routines
+                    if cleanlist:
+                        time.sleep(2)
+                        log.info("Cleaning Up movie: %s by removing processed files!", moviepath)
+                        self.cleanfiles(cleanlist, movietxt, group)
+                        log.info("Successfully cleaned up movie: %s!", moviepath)
+
+                    # Script ran as expected!
+                    log.debug("Updated Renamed Movie Files: %s", group['renamed_files'])
+                    return True
                 else:
-                    log.debug(output + '\n')
-                    log.error("Stacking movie: %s was unsuccessfully!", moviepath)
-                    movie_error_count += 1
+                    log.info("Stackit returned an error code: %s", str(res))
             except:
                 log.error("Failed to stack movie(s): %s", (traceback.format_exc()))
 
             return False
-
-        endTime = time.time()
-        proc_time = str((round(endTime - startTime)))
-        log.info("##############################################")
-        log.info("				Runtime: %s seconds		         ", proc_time)
-        log.info("##############################################")
-        log.info(" [%i] Movie(s) were stacked successfully.     ", movie_count)
-        log.info("##############################################")
-        log.info(" [%i] Movie(s) generated processing errors!   ", movie_error_count)
-        log.info("##############################################")
-        
-        

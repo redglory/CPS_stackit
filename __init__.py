@@ -1,7 +1,7 @@
 from .main import Stackit
 
 def autoload():
-	return Stackit()
+    return Stackit()
 
 config = [{
     'name': 'stackit',
@@ -11,7 +11,7 @@ config = [{
             'list': 'notification_providers',
             'name': 'stackit',
             'label': 'Stackit',
-            'description': 'Stack movies part files into single video file',
+            'description': 'Stack movies using ffmpeg, merging part files into single movie file',
             'options': [
                 {
                     'name': 'enabled',
@@ -21,4 +21,4 @@ config = [{
             ],
         }
     ],
-}]        
+}]
