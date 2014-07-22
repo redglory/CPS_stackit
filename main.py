@@ -6,6 +6,7 @@ import os
 from couchpotato.core.logger import CPLog
 from couchpotato.core.event import addEvent, fireEvent
 from couchpotato.core.plugins.base import Plugin
+from couchpotato.core.helpers.variable import getTitle
 from couchpotato.environment import Env
 
 log = CPLog(__name__)
@@ -15,13 +16,14 @@ class Stackit(Plugin):
 
     def __init__(self):
 
-        # check if development setting is enabled to load new code and trigger renamer automatically
-        if Env.get('dev'):
-            def test():
-                fireEvent('renamer.scan')
-            addEvent('app.load', test)
+        if self.conf('enabled'):  # only load plugin if it is enabled on configs
+            # check if development setting is enabled to load new code and trigger renamer automatically
+            if Env.get('dev'):
+                def test():
+                    fireEvent('renamer.scan')
+                addEvent('app.load', test)
 
-        addEvent('renamer.after', self.stackit, priority=80)
+            addEvent('renamer.after', self.stackit, priority=80)
 
     def stackit(self, message = None, group = None):
         if not group: group = {}
@@ -30,8 +32,9 @@ class Stackit(Plugin):
         # group['identifier'] ex: tt0089218
         # group['filename'] ex: Avatar.(2009)
         # group['renamed_files'] ex: [u'E:\Movies\Avatar.(2009)\Avatar.(2009).DVD-Rip.cd1.avi', u'E:\Movies\Avatar.(2009)\Avatar.(2009).DVD-Rip.cd2.avi']
+        movie_name = getTitle(group)
         log.debug("IMDB identifier: %s", group['identifier'])
-        log.debug("Movie name: %s", group['dirname'])
+        log.debug("Movie name: %s", movie_name)
         log.debug("Downloaded Movie directory: %s", group['parentdir'])
         log.debug("Renamed Movie Files: %s", group['renamed_files'])
 
@@ -167,7 +170,7 @@ class Stackit(Plugin):
                     log.debug("Updated Renamed Movie Files: %s", group['renamed_files'])
                     return True
                 else:
-                    log.info("Stackit returned an error code: %s", str(res))
+                    log.info("Stackit returned an error code: %s \n %s", (str(res), (traceback.format_exc())))
             except:
                 log.error("Failed to stack movie(s): %s", (traceback.format_exc()))
 
